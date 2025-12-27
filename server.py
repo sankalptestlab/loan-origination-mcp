@@ -302,27 +302,10 @@ Return ONLY valid JSON, no other text."""
 if __name__ == "__main__":
     import sys
     
-    # Check if running as HTTP server (on Render) or STDIO (for MCP clients)
     if "--http" in sys.argv or os.getenv("RENDER"):
-        # HTTP mode for Render
         port = int(os.getenv("PORT", 10000))
         print(f"Starting MCP server in HTTP mode on port {port}...")
         mcp.run(transport="sse", host="0.0.0.0", port=port)
     else:
-        # STDIO mode for n8n/MCP clients
         print("Starting MCP server in STDIO mode...")
         mcp.run(transport="stdio")
-```
-
-### Update Render Start Command:
-
-Go to Render dashboard → your service → Settings → Build & Deploy
-
-Change **Start Command** from:
-```
-python server.py
-```
-
-To:
-```
-python server.py --http

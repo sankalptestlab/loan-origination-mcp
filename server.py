@@ -1,90 +1,149 @@
 import os
-import json
-from typing import Dict, List, Optional
-from datetime import datetime
+from typing import Dict, Any, Optional, List
+from datetime import datetime, timedelta
 from fastmcp import FastMCP
-import anthropic
+from anthropic import Anthropic
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
+import json
 
 load_dotenv()
 
 mcp = FastMCP("Loan Origination MCP Server")
 
-def get_db():
+anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+def get_db_connection():
     return psycopg2.connect(
         os.getenv("DATABASE_URL"),
         cursor_factory=RealDictCursor
     )
 
-anthropic_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-
 @mcp.tool()
-def verify_gst(gst_number: str) -> dict:
-    """Verify GST number and fetch business report."""
-    
-    if gst_number == "09AADCF8429L1Z4":
-        mock_report = {
-            "valid": True,
-            "business_name": "FINAGG TECHNOLOGIES PRIVATE LIMITED",
-            "gst_number": gst_number,
-            "constitution": "Private Limited",
-            "registration_date": "2021-02-21",
-            "address": "C 1,SECTOR 16,Noida,Uttar Pradesh-201301",
-            "annual_turnover": 24148440.33,
-            "filing_compliance_score": 0.84,
-            "credit_score": "CMR-2",
-            "active_loans": 19,
-            "total_outstanding": 2710443.00,
-            "overdue_amount": 138898.00
-        }
-        
-        conn = get_db()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO verifications 
-            (verification_type, identifier, valid, raw_response, cached, expires_at)
-            VALUES (%s, %s, %s, %s, %s, NOW() + INTERVAL '7 days')
-            RETURNING id
-        """, ("gst", gst_number, True, json.dumps(mock_report), True))
-        conn.commit()
-        cur.close()
+def health_check() -> Dict[str, Any]:
+    """Check if the MCP server and database are healthy"""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.close()
         conn.close()
         
         return {
-            "valid": True,
-            "report": mock_report,
-            "cached": False
+            "status": "healthy",
+            "timestamp": datetime.now().isoformat(),
+            "database": "connected",
+            "anthropic_key": "configured" if os.getenv("ANTHROPIC_API_KEY") else "missing"
         }
-    else:
+    except Exception as e:
         return {
-            "valid": False,
-            "error": "GST number not found in mock data. For MVP demo, use: 09AADCF8429L1Z4"
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
         }
 
 @mcp.tool()
-def verify_pan(pan_number: str) -> dict:
-    """Verify PAN number."""
+def verify_gst(gst_number: str) -> Dict[str, Any]:
+    """Verify GST number and return business data (mock for MVP)"""
+    
+    if gst_number == "09AADCF8429L1Z4":
+        mock_data = {
+            "gst_number": gst_number,
+            "business_name": "FINAGG TECHNOLOGIES PRIVATE LIMITED",
+            "trade_name": "FINAGG TECHNOLOGIES PRIVATE LIMITED",
+            "constitution": "Private Limited",
+            "address": "C 1,SECTOR 16,Noida,Uttar Pradesh-201301",
+            "date_of_registration": "2021-02-21",
+            "annual_turnover": 24148440.33,
+            "filing_compliance": 0.84,
+            "pan_number": "AADCF8429L",
+            "verified": True,
+            "verification_date": datetime.now().isoformat()
+        }
+    else:
+        mock_data = {
+            "gst_number": gst_number,
+            "verified": False,
+            "error": "GST number not found in demo database. Use 09AADCF8429L1Z4 for demo.",
+            "verification_date": datetime.now().isoformat()
+        }
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO verifications (id, verification_type, identifier, raw_response, parsed_data, expires_at)
+            VALUES (gen_random_uuid(), %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                "GST",
+                gst_number,
+                json.dumps(mock_data),
+                json.dumps(mock_data),
+                datetime.now() + timedelta(days=7)
+            )
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error caching verification: {e}")
+    
+    return mock_data
+
+@mcp.tool()
+def verify_pan(pan_number: str) -> Dict[str, Any]:
+    """Verify PAN number (mock for MVP)"""
     
     if pan_number == "AADCF8429L":
-        return {
-            "valid": True,
+        mock_data = {
+            "pan_number": pan_number,
             "name": "FINAGG TECHNOLOGIES PRIVATE LIMITED",
+            "verified": True,
             "status": "Active",
-            "entity_type": "company"
+            "verification_date": datetime.now().isoformat()
         }
     else:
-        return {
-            "valid": False,
-            "error": "PAN not found in mock data. For MVP demo, use: AADCF8429L"
+        mock_data = {
+            "pan_number": pan_number,
+            "verified": False,
+            "error": "PAN number not found in demo database. Use AADCF8429L for demo.",
+            "verification_date": datetime.now().isoformat()
         }
+    
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO verifications (id, verification_type, identifier, raw_response, parsed_data, expires_at)
+            VALUES (gen_random_uuid(), %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                "PAN",
+                pan_number,
+                json.dumps(mock_data),
+                json.dumps(mock_data),
+                datetime.now() + timedelta(days=7)
+            )
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        print(f"Error caching verification: {e}")
+    
+    return mock_data
 
 @mcp.tool()
-def parse_gst_report(report: dict) -> dict:
-    """Extract structured data from GST report."""
+def parse_gst_report(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Parse GST report and extract structured data"""
     
-    credit_score_mapping = {
+    credit_score_map = {
         "CMR-1": 850,
         "CMR-2": 750,
         "CMR-3": 650,
@@ -93,149 +152,154 @@ def parse_gst_report(report: dict) -> dict:
     }
     
     parsed = {
-        "business_name": report.get("business_name"),
-        "constitution": report.get("constitution"),
-        "incorporation_date": report.get("registration_date"),
-        "annual_turnover": report.get("annual_turnover"),
-        "filing_compliance_score": report.get("filing_compliance_score"),
-        "credit_score_bureau": report.get("credit_score"),
-        "credit_score_numeric": credit_score_mapping.get(report.get("credit_score"), 650),
-        "existing_debt": report.get("total_outstanding", 0),
-        "overdue_amount": report.get("overdue_amount", 0),
-        "active_loan_count": report.get("active_loans", 0)
+        "business_name": report.get("business_name", ""),
+        "gst_number": report.get("gst_number", ""),
+        "pan_number": report.get("pan_number", ""),
+        "annual_turnover": report.get("annual_turnover", 0),
+        "filing_compliance": report.get("filing_compliance", 0),
+        "credit_score_text": report.get("credit_score", "CMR-2"),
+        "credit_score_numeric": credit_score_map.get(report.get("credit_score", "CMR-2"), 750),
+        "existing_debt": report.get("existing_loans", 0),
+        "constitution": report.get("constitution", ""),
+        "address": report.get("address", ""),
+        "parsed_at": datetime.now().isoformat()
     }
     
     return parsed
 
 @mcp.tool()
-def calculate_eligibility(business_data: dict) -> dict:
-    """Calculate loan eligibility based on business data."""
+def calculate_eligibility(business_data: Dict[str, Any]) -> Dict[str, Any]:
+    """Calculate loan eligibility based on business data"""
     
-    credit_score = business_data.get("credit_score_numeric", 650)
     annual_turnover = business_data.get("annual_turnover", 0)
     existing_debt = business_data.get("existing_debt", 0)
-    requested_amount = business_data.get("requested_amount", 0)
-    collateral_available = business_data.get("collateral_available", False)
-    filing_compliance = business_data.get("filing_compliance_score", 0.5)
+    requested_amount = business_data.get("loan_amount", 0)
+    credit_score = business_data.get("credit_score_numeric", 750)
     
-    monthly_revenue = annual_turnover / 12
-    monthly_obligation = existing_debt / 36
-    dti_ratio = monthly_obligation / monthly_revenue if monthly_revenue > 0 else 1.0
+    dti_ratio = existing_debt / annual_turnover if annual_turnover > 0 else 1.0
     
-    if collateral_available:
-        max_eligible = min(annual_turnover * 0.5, 50000000)
+    max_eligible = annual_turnover * 0.3
+    
+    if credit_score >= 750:
+        risk_rating = "LOW"
+        approval_probability = 0.90
+    elif credit_score >= 650:
+        risk_rating = "LOW-MEDIUM"
+        approval_probability = 0.75
+    elif credit_score >= 550:
+        risk_rating = "MEDIUM"
+        approval_probability = 0.60
     else:
-        max_eligible = min(annual_turnover * 0.3, 7500000)
+        risk_rating = "HIGH"
+        approval_probability = 0.30
     
-    decision = "DECLINED"
-    approved_amount = 0
-    risk_rating = "HIGH"
-    
-    if credit_score >= 650 and dti_ratio < 0.5 and filing_compliance >= 0.6:
-        if requested_amount <= max_eligible:
-            decision = "APPROVED"
-            approved_amount = requested_amount
-            risk_rating = "LOW" if credit_score >= 750 else "MEDIUM"
-        else:
-            decision = "CONDITIONAL"
-            approved_amount = max_eligible
-            risk_rating = "MEDIUM"
+    if dti_ratio > 0.4:
+        decision = "DECLINED"
+        reason = "Debt-to-income ratio too high"
+    elif requested_amount > max_eligible:
+        decision = "CONDITIONAL"
+        reason = f"Requested amount exceeds maximum eligible amount of ₹{max_eligible:,.0f}"
+    elif credit_score < 550:
+        decision = "DECLINED"
+        reason = "Credit score too low"
+    else:
+        decision = "APPROVED"
+        reason = "All eligibility criteria met"
     
     return {
         "decision": decision,
-        "approved_amount": approved_amount,
+        "reason": reason,
+        "approved_amount": min(requested_amount, max_eligible) if decision != "DECLINED" else 0,
         "max_eligible": max_eligible,
         "risk_rating": risk_rating,
+        "approval_probability": approval_probability,
         "dti_ratio": round(dti_ratio, 3),
         "credit_score": credit_score,
-        "calculations": {
-            "monthly_revenue": monthly_revenue,
-            "monthly_obligation": monthly_obligation,
-            "compliance_score": filing_compliance
-        }
+        "assessed_at": datetime.now().isoformat()
     }
 
 @mcp.tool()
-def get_lender_database(filters: Optional[dict] = None) -> List[dict]:
-    """Fetch active lenders from database."""
-    
-    conn = get_db()
-    cur = conn.cursor()
-    
-    query = "SELECT DISTINCT ON (name) * FROM lenders WHERE active = true"
-    params = []
-    
-    if filters:
-        if filters.get("min_amount"):
-            query += " AND min_amount <= %s"
-            params.append(filters["min_amount"])
-        if filters.get("max_amount"):
-            query += " AND max_amount >= %s"
-            params.append(filters["max_amount"])
-    
-    query += " LIMIT 3"
-    
-    cur.execute(query, params)
-    lenders = cur.fetchall()
-    cur.close()
-    conn.close()
-    
-    return [dict(lender) for lender in lenders]
-
-@mcp.tool()
-def extract_intent(message: str) -> dict:
-    """Extract intent from customer message using Claude."""
-    
-    response = anthropic_client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=500,
-        messages=[{
-            "role": "user",
-            "content": f"""Extract structured intent from this message:
-
-Message: "{message}"
-
-Return JSON with:
-- loan_amount (number or null)
-- purpose (string or null)
-- urgency (low/medium/high)
-
-Only JSON, no explanation."""
-        }]
-    )
+def get_lender_database(filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Get lenders from database with optional filters"""
     
     try:
-        intent_data = json.loads(response.content[0].text)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        query = """
+            SELECT DISTINCT ON (name) 
+                id, name, product_name, interest_rate_min, interest_rate_max,
+                commission_structure, approval_rate_avg, active
+            FROM lenders
+            WHERE active = true
+        """
+        
+        params = []
+        
+        if filters:
+            if filters.get("min_amount"):
+                query += " AND loan_amount_min <= %s"
+                params.append(filters["min_amount"])
+            
+            if filters.get("credit_score"):
+                query += " AND min_credit_score <= %s"
+                params.append(filters["credit_score"])
+        
+        query += " ORDER BY name, id LIMIT 3"
+        
+        cursor.execute(query, params)
+        lenders = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        return [dict(lender) for lender in lenders]
+        
+    except Exception as e:
+        print(f"Error fetching lenders: {e}")
+        return []
+
+@mcp.tool()
+def extract_intent(message: str) -> Dict[str, Any]:
+    """Extract loan intent from customer message using Claude"""
+    
+    try:
+        response = anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            messages=[{
+                "role": "user",
+                "content": f"""Extract loan intent from this message: "{message}"
+
+Return JSON with:
+- loan_amount: number (in rupees, convert lakhs/crores to actual number)
+- loan_purpose: string (brief description)
+- urgency: string (low/medium/high)
+- has_collateral: boolean (if mentioned)
+
+Return ONLY valid JSON, no other text."""
+            }]
+        )
+        
+        result_text = response.content[0].text
+        result = json.loads(result_text)
+        
         return {
-            "intents": [{"type": "loan_request", "confidence": 0.9, "entities": intent_data}],
-            "sentiment": "neutral"
+            "extracted": True,
+            "intent": result,
+            "original_message": message,
+            "extracted_at": datetime.now().isoformat()
         }
-    except:
-        return {"intents": [], "sentiment": "neutral", "error": "Could not parse intent"}
+        
+    except Exception as e:
+        return {
+            "extracted": False,
+            "error": str(e),
+            "original_message": message,
+            "extracted_at": datetime.now().isoformat()
+        }
 
 if __name__ == "__main__":
-    import uvicorn
     port = int(os.getenv("PORT", 10000))
-    uvicorn.run(mcp.get_asgi_app(), host="0.0.0.0", port=port)
-```
-
----
-
-## STEP 4: Update `requirements.txt`
-
-Add `uvicorn`:
-```
-fastmcp==0.2.0
-anthropic==0.40.0
-python-dotenv==1.0.0
-psycopg2-binary==2.9.9
-httpx==0.27.0
-pydantic==2.7.0
-uvicorn==0.27.0
-```
-
----
-
-## STEP 5: Update `Procfile`
-```
-web: python server.py
+    print(f"Starting MCP server on port {port}...")
+    mcp.run(transport="stdio")

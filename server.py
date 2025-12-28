@@ -7,16 +7,17 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 import json
-from starlette.applications import Starlette
-from starlette.responses import JSONResponse
-from starlette.routing import Route
-from datetime import datetime
-
 from starlette.responses import JSONResponse, HTMLResponse
-from starlette.routing import Route
-from datetime import datetime
+from starlette.routing import Route, Mount
+from starlette.applications import Starlette
 
-# Root endpoint for browser access
+# Load environment variables
+load_dotenv()
+
+# ============================================================================
+# HTTP ENDPOINTS (for browser/health checks)
+# ============================================================================
+
 async def root_endpoint(request):
     """Welcome page when accessing via browser"""
     html = """
@@ -56,7 +57,6 @@ async def root_endpoint(request):
 async def health_endpoint(request):
     """JSON health check"""
     try:
-        import psycopg2
         conn = psycopg2.connect(os.getenv("DATABASE_URL"))
         conn.close()
         db_status = "connected"
@@ -71,15 +71,23 @@ async def health_endpoint(request):
         "tools": 7
     })
 
-mcp = FastMCP("Loan Origination MCP Server")
+# ============================================================================
+# MCP SERVER INITIALIZATION
+# ============================================================================
 
+mcp = FastMCP("Loan Origination MCP Server")
 anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 def get_db_connection():
+    """Create database connection"""
     return psycopg2.connect(
         os.getenv("DATABASE_URL"),
         cursor_factory=RealDictCursor
     )
+
+# ============================================================================
+# MCP TOOLS
+# ============================================================================
 
 @mcp.tool()
 def health_check() -> Dict[str, Any]:
@@ -359,50 +367,30 @@ Return ONLY valid JSON, no other text."""
             "original_message": message,
             "extracted_at": datetime.now().isoformat()
         }
-# Add HTTP health check endpoint
-from starlette.responses import JSONResponse
-from starlette.routing import Route
-from datetime import datetime
-import psycopg2
 
-async def health_check(request):
-    """Health check endpoint for Render"""
-    try:
-        # Test database connection
-        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
-        conn.close()
-        db_status = "connected"
-    except Exception as e:
-        db_status = f"error: {str(e)}"
-    
-    return JSONResponse({
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "database": db_status,
-        "service": "Loan Origination MCP Server",
-        "version": "1.0.0"
-    })
-
-# Add route to FastMCP
-mcp.add_custom_route(Route("/health", health_check))
+# ============================================================================
+# MAIN ENTRY POINT
+# ============================================================================
 
 if __name__ == "__main__":
     import sys
+    import uvicorn
     
     if "--http" in sys.argv or os.getenv("RENDER"):
         port = int(os.getenv("PORT", 10000))
         print(f"Starting MCP server in HTTP mode on port {port}...")
         
-        # Get the underlying Starlette app and add custom routes
-        from fastmcp import FastMCP
-        app = mcp.get_asgi_app()
+        # Create the MCP SSE app
+        mcp_app = mcp.get_asgi_app()
         
-        # Insert routes at the beginning
-        app.routes.insert(0, Route("/", root_endpoint))
-        app.routes.insert(1, Route("/health", health_endpoint))
+        # Create a wrapper app with custom routes
+        app = Starlette(routes=[
+            Route("/", root_endpoint),
+            Route("/health", health_endpoint),
+            Mount("/", mcp_app),  # Mount MCP app for all other routes
+        ])
         
-        # Run with custom app
-        import uvicorn
+        # Run with uvicorn
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         print("Starting MCP server in STDIO mode...")

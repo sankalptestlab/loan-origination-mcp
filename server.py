@@ -374,24 +374,11 @@ Return ONLY valid JSON, no other text."""
 
 if __name__ == "__main__":
     import sys
-    import uvicorn
     
     if "--http" in sys.argv or os.getenv("RENDER"):
         port = int(os.getenv("PORT", 10000))
         print(f"Starting MCP server in HTTP mode on port {port}...")
-        
-        # Create the MCP SSE app
-        mcp_app = mcp.get_asgi_app()
-        
-        # Create a wrapper app with custom routes
-        app = Starlette(routes=[
-            Route("/", root_endpoint),
-            Route("/health", health_endpoint),
-            Mount("/", mcp_app),  # Mount MCP app for all other routes
-        ])
-        
-        # Run with uvicorn
-        uvicorn.run(app, host="0.0.0.0", port=port)
+        mcp.run(transport="sse", port=port, host="0.0.0.0")
     else:
         print("Starting MCP server in STDIO mode...")
         mcp.run(transport="stdio")

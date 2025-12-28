@@ -12,10 +12,51 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from datetime import datetime
 
-# Create health check route
+from starlette.responses import JSONResponse, HTMLResponse
+from starlette.routing import Route
+from datetime import datetime
+
+# Root endpoint for browser access
+async def root_endpoint(request):
+    """Welcome page when accessing via browser"""
+    html = """
+    <!DOCTYPE html>
+    <html>
+    <head><title>Loan Origination MCP Server</title></head>
+    <body style="font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px;">
+        <h1>🏦 Loan Origination MCP Server</h1>
+        <p><strong>Status:</strong> ✅ Running</p>
+        <p><strong>Version:</strong> 1.0.0</p>
+        <p><strong>Transport:</strong> SSE (Server-Sent Events)</p>
+        
+        <h2>Available Tools (7):</h2>
+        <ul>
+            <li>health_check</li>
+            <li>verify_gst</li>
+            <li>verify_pan</li>
+            <li>parse_gst_report</li>
+            <li>calculate_eligibility</li>
+            <li>get_lender_database</li>
+            <li>extract_intent</li>
+        </ul>
+        
+        <h2>Endpoints:</h2>
+        <ul>
+            <li><code>GET /</code> - This page</li>
+            <li><code>GET /health</code> - Health check (JSON)</li>
+            <li><code>POST /sse</code> - MCP protocol endpoint</li>
+        </ul>
+        
+        <p><em>Deployed on Render.com | Connected to Supabase</em></p>
+    </body>
+    </html>
+    """
+    return HTMLResponse(html)
+
 async def health_endpoint(request):
-    """HTTP health check for Render monitoring"""
+    """JSON health check"""
     try:
+        import psycopg2
         conn = psycopg2.connect(os.getenv("DATABASE_URL"))
         conn.close()
         db_status = "connected"
@@ -27,10 +68,8 @@ async def health_endpoint(request):
         "timestamp": datetime.utcnow().isoformat(),
         "database": db_status,
         "service": "Loan Origination MCP Server",
-        "version": "1.0.0"
+        "tools": 7
     })
-
-load_dotenv()
 
 mcp = FastMCP("Loan Origination MCP Server")
 
@@ -349,18 +388,22 @@ mcp.add_custom_route(Route("/health", health_check))
 
 if __name__ == "__main__":
     import sys
-    from starlette.routing import Mount
     
     if "--http" in sys.argv or os.getenv("RENDER"):
         port = int(os.getenv("PORT", 10000))
         print(f"Starting MCP server in HTTP mode on port {port}...")
         
-        # Add health check to MCP's app
-        if hasattr(mcp, '_app'):
-            # Access the internal Starlette app
-            mcp._app.routes.insert(0, Route("/health", health_endpoint))
+        # Get the underlying Starlette app and add custom routes
+        from fastmcp import FastMCP
+        app = mcp.get_asgi_app()
         
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
+        # Insert routes at the beginning
+        app.routes.insert(0, Route("/", root_endpoint))
+        app.routes.insert(1, Route("/health", health_endpoint))
+        
+        # Run with custom app
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         print("Starting MCP server in STDIO mode...")
         mcp.run(transport="stdio")

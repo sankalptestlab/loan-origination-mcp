@@ -7,6 +7,28 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 from dotenv import load_dotenv
 import json
+from starlette.applications import Starlette
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+from datetime import datetime
+
+# Create health check route
+async def health_endpoint(request):
+    """HTTP health check for Render monitoring"""
+    try:
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        conn.close()
+        db_status = "connected"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+    
+    return JSONResponse({
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "database": db_status,
+        "service": "Loan Origination MCP Server",
+        "version": "1.0.0"
+    })
 
 load_dotenv()
 
@@ -327,11 +349,17 @@ mcp.add_custom_route(Route("/health", health_check))
 
 if __name__ == "__main__":
     import sys
+    from starlette.routing import Mount
     
     if "--http" in sys.argv or os.getenv("RENDER"):
         port = int(os.getenv("PORT", 10000))
         print(f"Starting MCP server in HTTP mode on port {port}...")
-        print(f"Health check available at: http://0.0.0.0:{port}/health")
+        
+        # Add health check to MCP's app
+        if hasattr(mcp, '_app'):
+            # Access the internal Starlette app
+            mcp._app.routes.insert(0, Route("/health", health_endpoint))
+        
         mcp.run(transport="sse", host="0.0.0.0", port=port)
     else:
         print("Starting MCP server in STDIO mode...")

@@ -298,6 +298,32 @@ Return ONLY valid JSON, no other text."""
             "original_message": message,
             "extracted_at": datetime.now().isoformat()
         }
+# Add HTTP health check endpoint
+from starlette.responses import JSONResponse
+from starlette.routing import Route
+from datetime import datetime
+import psycopg2
+
+async def health_check(request):
+    """Health check endpoint for Render"""
+    try:
+        # Test database connection
+        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        conn.close()
+        db_status = "connected"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+    
+    return JSONResponse({
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "database": db_status,
+        "service": "Loan Origination MCP Server",
+        "version": "1.0.0"
+    })
+
+# Add route to FastMCP
+mcp.add_custom_route(Route("/health", health_check))
 
 if __name__ == "__main__":
     import sys
@@ -305,6 +331,7 @@ if __name__ == "__main__":
     if "--http" in sys.argv or os.getenv("RENDER"):
         port = int(os.getenv("PORT", 10000))
         print(f"Starting MCP server in HTTP mode on port {port}...")
+        print(f"Health check available at: http://0.0.0.0:{port}/health")
         mcp.run(transport="sse", host="0.0.0.0", port=port)
     else:
         print("Starting MCP server in STDIO mode...")

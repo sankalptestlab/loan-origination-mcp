@@ -502,7 +502,7 @@ if __name__ == "__main__":
     else:
         print("Starting MCP server in STDIO mode...")
         mcp.run(transport="stdio")
-`if __name__ == "__main__":
+if __name__ == "__main__":
     import sys
     
     if "--http" in sys.argv or os.getenv("RENDER"):

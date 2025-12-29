@@ -78,7 +78,7 @@ async def health_endpoint(request):
     })
 
 # ============================================================================
-# REST API ENDPOINTS (NEW - ADD THESE)
+# REST API ENDPOINTS (FIXED)
 # ============================================================================
 
 async def api_extract_intent(request):
@@ -90,8 +90,34 @@ async def api_extract_intent(request):
         if not message:
             return JSONResponse({"error": "message field is required"}, status_code=400)
         
-        result = extract_intent(message)
-        return JSONResponse(result)
+        # Call the actual function, not the MCP-wrapped tool
+        response = anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            messages=[{
+                "role": "user",
+                "content": f"""Extract loan intent from this message: "{message}"
+
+Return JSON with:
+- loan_amount: number (in rupees, convert lakhs/crores to actual number)
+- loan_purpose: string (brief description)
+- urgency: string (low/medium/high)
+- has_collateral: boolean (if mentioned)
+
+Return ONLY valid JSON, no other text."""
+            }]
+        )
+        
+        result_text = response.content[0].text
+        result = json.loads(result_text)
+        
+        return JSONResponse({
+            "extracted": True,
+            "intent": result,
+            "original_message": message,
+            "extracted_at": datetime.now().isoformat()
+        })
+        
     except json.JSONDecodeError:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
     except Exception as e:
@@ -106,8 +132,31 @@ async def api_verify_gst(request):
         if not gst_number:
             return JSONResponse({"error": "gst_number field is required"}, status_code=400)
         
-        result = verify_gst(gst_number)
+        # Mock GST data
+        if gst_number == "09AADCF8429L1Z4":
+            result = {
+                "gst_number": gst_number,
+                "business_name": "FINAGG TECHNOLOGIES PRIVATE LIMITED",
+                "trade_name": "FINAGG TECHNOLOGIES PRIVATE LIMITED",
+                "constitution": "Private Limited",
+                "address": "C 1,SECTOR 16,Noida,Uttar Pradesh-201301",
+                "date_of_registration": "2021-02-21",
+                "annual_turnover": 24148440.33,
+                "filing_compliance": 0.84,
+                "pan_number": "AADCF8429L",
+                "verified": True,
+                "verification_date": datetime.now().isoformat()
+            }
+        else:
+            result = {
+                "gst_number": gst_number,
+                "verified": False,
+                "error": "GST number not found. Use 09AADCF8429L1Z4 for demo.",
+                "verification_date": datetime.now().isoformat()
+            }
+        
         return JSONResponse(result)
+        
     except json.JSONDecodeError:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
     except Exception as e:
@@ -122,8 +171,25 @@ async def api_verify_pan(request):
         if not pan_number:
             return JSONResponse({"error": "pan_number field is required"}, status_code=400)
         
-        result = verify_pan(pan_number)
+        # Mock PAN data
+        if pan_number == "AADCF8429L":
+            result = {
+                "pan_number": pan_number,
+                "name": "FINAGG TECHNOLOGIES PRIVATE LIMITED",
+                "verified": True,
+                "status": "Active",
+                "verification_date": datetime.now().isoformat()
+            }
+        else:
+            result = {
+                "pan_number": pan_number,
+                "verified": False,
+                "error": "PAN not found. Use AADCF8429L for demo.",
+                "verification_date": datetime.now().isoformat()
+            }
+        
         return JSONResponse(result)
+        
     except json.JSONDecodeError:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
     except Exception as e:
@@ -138,8 +204,30 @@ async def api_parse_gst_report(request):
         if not report:
             return JSONResponse({"error": "report field is required"}, status_code=400)
         
-        result = parse_gst_report(report)
+        credit_score_map = {
+            "CMR-1": 850,
+            "CMR-2": 750,
+            "CMR-3": 650,
+            "CMR-4": 550,
+            "CMR-5": 450
+        }
+        
+        result = {
+            "business_name": report.get("business_name", ""),
+            "gst_number": report.get("gst_number", ""),
+            "pan_number": report.get("pan_number", ""),
+            "annual_turnover": report.get("annual_turnover", 0),
+            "filing_compliance": report.get("filing_compliance", 0),
+            "credit_score_text": report.get("credit_score", "CMR-2"),
+            "credit_score_numeric": credit_score_map.get(report.get("credit_score", "CMR-2"), 750),
+            "existing_debt": report.get("existing_loans", 0),
+            "constitution": report.get("constitution", ""),
+            "address": report.get("address", ""),
+            "parsed_at": datetime.now().isoformat()
+        }
+        
         return JSONResponse(result)
+        
     except json.JSONDecodeError:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
     except Exception as e:
@@ -154,8 +242,54 @@ async def api_calculate_eligibility(request):
         if not business_data:
             return JSONResponse({"error": "business_data field is required"}, status_code=400)
         
-        result = calculate_eligibility(business_data)
+        annual_turnover = business_data.get("annual_turnover", 0)
+        existing_debt = business_data.get("existing_debt", 0)
+        requested_amount = business_data.get("loan_amount", 0)
+        credit_score = business_data.get("credit_score_numeric", 750)
+        
+        dti_ratio = existing_debt / annual_turnover if annual_turnover > 0 else 1.0
+        max_eligible = annual_turnover * 0.3
+        
+        if credit_score >= 750:
+            risk_rating = "LOW"
+            approval_probability = 0.90
+        elif credit_score >= 650:
+            risk_rating = "LOW-MEDIUM"
+            approval_probability = 0.75
+        elif credit_score >= 550:
+            risk_rating = "MEDIUM"
+            approval_probability = 0.60
+        else:
+            risk_rating = "HIGH"
+            approval_probability = 0.30
+        
+        if dti_ratio > 0.4:
+            decision = "DECLINED"
+            reason = "Debt-to-income ratio too high"
+        elif requested_amount > max_eligible:
+            decision = "CONDITIONAL"
+            reason = f"Requested amount exceeds maximum eligible of ₹{max_eligible:,.0f}"
+        elif credit_score < 550:
+            decision = "DECLINED"
+            reason = "Credit score too low"
+        else:
+            decision = "APPROVED"
+            reason = "All eligibility criteria met"
+        
+        result = {
+            "decision": decision,
+            "reason": reason,
+            "approved_amount": min(requested_amount, max_eligible) if decision != "DECLINED" else 0,
+            "max_eligible": max_eligible,
+            "risk_rating": risk_rating,
+            "approval_probability": approval_probability,
+            "dti_ratio": round(dti_ratio, 3),
+            "credit_score": credit_score,
+            "assessed_at": datetime.now().isoformat()
+        }
+        
         return JSONResponse(result)
+        
     except json.JSONDecodeError:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
     except Exception as e:
@@ -167,8 +301,38 @@ async def api_get_lenders(request):
         body = await request.json()
         filters = body.get("filters", None)
         
-        result = get_lender_database(filters)
-        return JSONResponse({"lenders": result})
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        query = """
+            SELECT DISTINCT ON (name) 
+                id, name, product_name, interest_rate_min, interest_rate_max,
+                commission_structure, approval_rate_avg, active
+            FROM lenders
+            WHERE active = true
+        """
+        
+        params = []
+        
+        if filters:
+            if filters.get("min_amount"):
+                query += " AND loan_amount_min <= %s"
+                params.append(filters["min_amount"])
+            
+            if filters.get("credit_score"):
+                query += " AND min_credit_score <= %s"
+                params.append(filters["credit_score"])
+        
+        query += " ORDER BY name, id LIMIT 3"
+        
+        cursor.execute(query, params)
+        lenders = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        return JSONResponse({"lenders": [dict(l) for l in lenders]})
+        
     except json.JSONDecodeError:
         return JSONResponse({"error": "Invalid JSON"}, status_code=400)
     except Exception as e:

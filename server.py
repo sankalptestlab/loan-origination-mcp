@@ -502,18 +502,13 @@ if __name__ == "__main__":
     else:
         print("Starting MCP server in STDIO mode...")
         mcp.run(transport="stdio")
-```
-
-## 🚀 Deployment Steps:
-
-1. **Update `server.py`** on Render with the code above
-2. **Redeploy** the service on Render
-3. **Update n8n** "P1 - Extract Intent (MCP)" node:
-```
-Method: POST
-URL: https://loan-origination-mcp.onrender.com/api/extract-intent
-
-Body (JSON):
-{
-  "message": "{{ $('Webhook - Chat Input').item.json.body.message }}"
-}
+`if __name__ == "__main__":
+    import sys
+    
+    if "--http" in sys.argv or os.getenv("RENDER"):
+        port = int(os.getenv("PORT", 10000))
+        print(f"Starting MCP server in HTTP mode on port {port}...")
+        mcp.run(transport="sse", port=port, host="0.0.0.0")
+    else:
+        print("Starting MCP server in STDIO mode...")
+        mcp.run(transport="stdio")

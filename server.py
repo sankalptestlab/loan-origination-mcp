@@ -475,13 +475,20 @@ Return ONLY valid JSON, no other text."""
 # MAIN ENTRY POINT (UPDATED)
 # ============================================================================
 
+# ============================================================================
+# MAIN ENTRY POINT - HYBRID APPROACH
+# ============================================================================
+
 if __name__ == "__main__":
     import sys
+    from starlette.applications import Starlette
+    from starlette.routing import Route
+    import uvicorn
     
     if "--http" in sys.argv or os.getenv("RENDER"):
-        # Create Starlette app with REST routes
-        from starlette.applications import Starlette
+        port = int(os.getenv("PORT", 10000))
         
+        # Create Starlette app with REST API routes
         routes = [
             Route("/", root_endpoint),
             Route("/health", health_endpoint),
@@ -493,22 +500,12 @@ if __name__ == "__main__":
             Route("/api/get-lenders", api_get_lenders, methods=["POST"]),
         ]
         
-        port = int(os.getenv("PORT", 10000))
-        print(f"Starting MCP server in HTTP mode on port {port}...")
-        print(f"REST API endpoints available at /api/*")
+        app = Starlette(routes=routes)
         
-        # Run MCP with custom routes
-        mcp.run(transport="sse", port=port, host="0.0.0.0", custom_routes=routes)
-    else:
-        print("Starting MCP server in STDIO mode...")
-        mcp.run(transport="stdio")
-if __name__ == "__main__":
-    import sys
-    
-    if "--http" in sys.argv or os.getenv("RENDER"):
-        port = int(os.getenv("PORT", 10000))
-        print(f"Starting MCP server in HTTP mode on port {port}...")
-        mcp.run(transport="sse", port=port, host="0.0.0.0")
+        print(f"Starting REST API server on port {port}...")
+        print(f"Endpoints: /api/extract-intent, /api/verify-gst, etc.")
+        
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         print("Starting MCP server in STDIO mode...")
         mcp.run(transport="stdio")

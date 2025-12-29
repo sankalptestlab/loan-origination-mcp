@@ -46,6 +46,12 @@ async def root_endpoint(request):
             <li><code>GET /</code> - This page</li>
             <li><code>GET /health</code> - Health check (JSON)</li>
             <li><code>POST /sse</code> - MCP protocol endpoint</li>
+            <li><code>POST /api/extract-intent</code> - Extract loan intent (REST)</li>
+            <li><code>POST /api/verify-gst</code> - Verify GST (REST)</li>
+            <li><code>POST /api/verify-pan</code> - Verify PAN (REST)</li>
+            <li><code>POST /api/parse-gst-report</code> - Parse GST report (REST)</li>
+            <li><code>POST /api/calculate-eligibility</code> - Calculate eligibility (REST)</li>
+            <li><code>POST /api/get-lenders</code> - Get lender database (REST)</li>
         </ul>
         
         <p><em>Deployed on Render.com | Connected to Supabase</em></p>
@@ -72,6 +78,103 @@ async def health_endpoint(request):
     })
 
 # ============================================================================
+# REST API ENDPOINTS (NEW - ADD THESE)
+# ============================================================================
+
+async def api_extract_intent(request):
+    """REST endpoint for extract_intent tool"""
+    try:
+        body = await request.json()
+        message = body.get("message", "")
+        
+        if not message:
+            return JSONResponse({"error": "message field is required"}, status_code=400)
+        
+        result = extract_intent(message)
+        return JSONResponse(result)
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+async def api_verify_gst(request):
+    """REST endpoint for verify_gst tool"""
+    try:
+        body = await request.json()
+        gst_number = body.get("gst_number", "")
+        
+        if not gst_number:
+            return JSONResponse({"error": "gst_number field is required"}, status_code=400)
+        
+        result = verify_gst(gst_number)
+        return JSONResponse(result)
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+async def api_verify_pan(request):
+    """REST endpoint for verify_pan tool"""
+    try:
+        body = await request.json()
+        pan_number = body.get("pan_number", "")
+        
+        if not pan_number:
+            return JSONResponse({"error": "pan_number field is required"}, status_code=400)
+        
+        result = verify_pan(pan_number)
+        return JSONResponse(result)
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+async def api_parse_gst_report(request):
+    """REST endpoint for parse_gst_report tool"""
+    try:
+        body = await request.json()
+        report = body.get("report", {})
+        
+        if not report:
+            return JSONResponse({"error": "report field is required"}, status_code=400)
+        
+        result = parse_gst_report(report)
+        return JSONResponse(result)
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+async def api_calculate_eligibility(request):
+    """REST endpoint for calculate_eligibility tool"""
+    try:
+        body = await request.json()
+        business_data = body.get("business_data", {})
+        
+        if not business_data:
+            return JSONResponse({"error": "business_data field is required"}, status_code=400)
+        
+        result = calculate_eligibility(business_data)
+        return JSONResponse(result)
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+async def api_get_lenders(request):
+    """REST endpoint for get_lender_database tool"""
+    try:
+        body = await request.json()
+        filters = body.get("filters", None)
+        
+        result = get_lender_database(filters)
+        return JSONResponse({"lenders": result})
+    except json.JSONDecodeError:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+# ============================================================================
 # MCP SERVER INITIALIZATION
 # ============================================================================
 
@@ -86,7 +189,7 @@ def get_db_connection():
     )
 
 # ============================================================================
-# MCP TOOLS
+# MCP TOOLS (keep all existing tools exactly as they are)
 # ============================================================================
 
 @mcp.tool()
@@ -369,16 +472,48 @@ Return ONLY valid JSON, no other text."""
         }
 
 # ============================================================================
-# MAIN ENTRY POINT
+# MAIN ENTRY POINT (UPDATED)
 # ============================================================================
 
 if __name__ == "__main__":
     import sys
     
     if "--http" in sys.argv or os.getenv("RENDER"):
+        # Create Starlette app with REST routes
+        from starlette.applications import Starlette
+        
+        routes = [
+            Route("/", root_endpoint),
+            Route("/health", health_endpoint),
+            Route("/api/extract-intent", api_extract_intent, methods=["POST"]),
+            Route("/api/verify-gst", api_verify_gst, methods=["POST"]),
+            Route("/api/verify-pan", api_verify_pan, methods=["POST"]),
+            Route("/api/parse-gst-report", api_parse_gst_report, methods=["POST"]),
+            Route("/api/calculate-eligibility", api_calculate_eligibility, methods=["POST"]),
+            Route("/api/get-lenders", api_get_lenders, methods=["POST"]),
+        ]
+        
         port = int(os.getenv("PORT", 10000))
         print(f"Starting MCP server in HTTP mode on port {port}...")
-        mcp.run(transport="sse", port=port, host="0.0.0.0")
+        print(f"REST API endpoints available at /api/*")
+        
+        # Run MCP with custom routes
+        mcp.run(transport="sse", port=port, host="0.0.0.0", custom_routes=routes)
     else:
         print("Starting MCP server in STDIO mode...")
         mcp.run(transport="stdio")
+```
+
+## 🚀 Deployment Steps:
+
+1. **Update `server.py`** on Render with the code above
+2. **Redeploy** the service on Render
+3. **Update n8n** "P1 - Extract Intent (MCP)" node:
+```
+Method: POST
+URL: https://loan-origination-mcp.onrender.com/api/extract-intent
+
+Body (JSON):
+{
+  "message": "{{ $('Webhook - Chat Input').item.json.body.message }}"
+}

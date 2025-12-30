@@ -1,187 +1,145 @@
+"""
+FastMCP Server for Loan Origination System
+Version: Production with Real Claude API
+"""
+
 import os
-from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
-from fastmcp import FastMCP
-from anthropic import Anthropic
+import json
+from datetime import datetime
+from typing import Optional, Dict, Any
 import psycopg2
 from psycopg2.extras import RealDictCursor
-from dotenv import load_dotenv
-import json
-from starlette.responses import JSONResponse, HTMLResponse
-from starlette.routing import Route, Mount
-from starlette.applications import Starlette
+from fastmcp import FastMCP
+from anthropic import Anthropic
+from starlette.responses import JSONResponse
+from starlette.requests import Request
 
-# Load environment variables
-load_dotenv()
+# Initialize FastMCP server
+mcp = FastMCP("Loan Origination MCP Server")
+
+# Initialize Anthropic client
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+if not ANTHROPIC_API_KEY:
+    raise ValueError("ANTHROPIC_API_KEY environment variable is required")
+
+anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+
+# Database connection
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is required")
+
+def get_db_connection():
+    """Get database connection"""
+    return psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
 
 # ============================================================================
-# HTTP ENDPOINTS (for browser/health checks)
+# HEALTH CHECK
 # ============================================================================
 
-async def root_endpoint(request):
-    """Welcome page when accessing via browser"""
-    html = """
-    <!DOCTYPE html>
-    <html>
-    <head><title>Loan Origination MCP Server</title></head>
-    <body style="font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px;">
-        <h1>🏦 Loan Origination MCP Server</h1>
-        <p><strong>Status:</strong> ✅ Running</p>
-        <p><strong>Version:</strong> 1.0.0</p>
-        <p><strong>Transport:</strong> SSE (Server-Sent Events)</p>
-        
-        <h2>Available Tools (7):</h2>
-        <ul>
-            <li>health_check</li>
-            <li>verify_gst</li>
-            <li>verify_pan</li>
-            <li>parse_gst_report</li>
-            <li>calculate_eligibility</li>
-            <li>get_lender_database</li>
-            <li>extract_intent</li>
-        </ul>
-        
-        <h2>Endpoints:</h2>
-        <ul>
-            <li><code>GET /</code> - This page</li>
-            <li><code>GET /health</code> - Health check (JSON)</li>
-            <li><code>POST /sse</code> - MCP protocol endpoint</li>
-            <li><code>POST /api/extract-intent</code> - Extract loan intent (REST)</li>
-            <li><code>POST /api/verify-gst</code> - Verify GST (REST)</li>
-            <li><code>POST /api/verify-pan</code> - Verify PAN (REST)</li>
-            <li><code>POST /api/parse-gst-report</code> - Parse GST report (REST)</li>
-            <li><code>POST /api/calculate-eligibility</code> - Calculate eligibility (REST)</li>
-            <li><code>POST /api/get-lenders</code> - Get lender database (REST)</li>
-        </ul>
-        
-        <p><em>Deployed on Render.com | Connected to Supabase</em></p>
-    </body>
-    </html>
-    """
-    return HTMLResponse(html)
-
-async def health_endpoint(request):
-    """JSON health check"""
+@mcp.tool()
+async def health_check() -> dict:
+    """Check server health and dependencies"""
     try:
-        conn = psycopg2.connect(os.getenv("DATABASE_URL"))
+        conn = get_db_connection()
         conn.close()
         db_status = "connected"
     except Exception as e:
         db_status = f"error: {str(e)}"
     
-    return JSONResponse({
+    return {
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now().isoformat(),
         "database": db_status,
-        "service": "Loan Origination MCP Server",
-        "tools": 7
-    })
+        "anthropic_key": "configured" if ANTHROPIC_API_KEY else "missing",
+        "version": "production-claude-api"
+    }
 
 # ============================================================================
-# REST API ENDPOINTS (FIXED)
+# REST API ENDPOINTS WITH REAL CLAUDE
 # ============================================================================
 
-async def api_extract_intent(request):
-    """REST endpoint for extract_intent tool - REAL CLAUDE VERSION"""
+async def api_extract_intent(request: Request):
+    """
+    REST endpoint for extract_intent - PRODUCTION VERSION WITH REAL CLAUDE
+    Uses Claude Sonnet 4 for intelligent intent extraction
+    """
     try:
         body = await request.json()
         message = body.get("message", "")
         
         if not message:
-            return JSONResponse(
-                {"error": "message field is required"}, 
-                status_code=400
-            )
+            return JSONResponse({"error": "message field is required"}, status_code=400)
         
-        # Check if Anthropic client is available
-        if not anthropic_client:
-            return JSONResponse(
-                {"error": "Anthropic API key not configured"}, 
-                status_code=500
-            )
-        
-        # Call Claude API
-        try:
-            response = anthropic_client.messages.create(
-                model="claude-sonnet-4-20250514",
-                max_tokens=1000,
-                messages=[{
-                    "role": "user",
-                    "content": f"""Extract loan intent from this message: "{message}"
+        # Call Claude API for intent extraction
+        response = anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            messages=[{
+                "role": "user",
+                "content": f"""Extract loan intent from this customer message: "{message}"
 
-Return ONLY valid JSON with these exact fields:
-{{
-  "loan_amount": <number in rupees>,
-  "loan_purpose": "<brief purpose>",
-  "urgency": "low|medium|high",
-  "has_collateral": true|false
-}}
+Analyze the message and return JSON with these fields:
+- loan_amount: number in rupees (convert "5 lakhs" to 500000, "2 crores" to 20000000)
+- loan_purpose: string (brief description like "vehicle purchase", "business expansion", "inventory", "equipment", "working capital")
+- urgency: string (low/medium/high based on words like "urgent", "asap", "planning", "future")
+- has_collateral: boolean (true if customer mentions collateral/security/property, false otherwise)
 
-Rules:
-- Convert "5 lakhs" to 500000, "2 crores" to 20000000
-- Infer urgency from words like "urgent", "immediately", "planning"
-- Set has_collateral to true only if explicitly mentioned
-- Return ONLY the JSON, no other text"""
-                }]
-            )
-            
-            # Extract JSON from Claude's response
-            result_text = response.content[0].text.strip()
-            
-            # Remove markdown code blocks if present
-            if result_text.startswith("```"):
-                result_text = result_text.split("```")[1]
-                if result_text.startswith("json"):
-                    result_text = result_text[4:]
-                result_text = result_text.strip()
-            
-            # Parse JSON
-            intent = json.loads(result_text)
-            
-            return JSONResponse({
-                "extracted": True,
-                "intent": intent,
-                "original_message": message,
-                "extracted_at": datetime.now().isoformat()
-            })
-            
-        except json.JSONDecodeError as e:
-            # Fallback: try to extract from Claude's response manually
-            import re
-            
-            amount = 5000000
-            lakh_match = re.search(r'(\d+)\s*lakh', message.lower())
-            if lakh_match:
-                amount = int(lakh_match.group(1)) * 100000
-            
-            crore_match = re.search(r'(\d+)\s*crore', message.lower())
-            if crore_match:
-                amount = int(crore_match.group(1)) * 10000000
-            
-            return JSONResponse({
-                "extracted": True,
-                "intent": {
-                    "loan_amount": amount,
-                    "loan_purpose": "business loan",
-                    "urgency": "medium",
-                    "has_collateral": False
-                },
-                "original_message": message,
-                "extracted_at": datetime.now().isoformat(),
-                "warning": "Fallback extraction used due to Claude parsing error"
-            })
-        
-    except Exception as e:
-        print(f"ERROR in api_extract_intent: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(
-            {"error": f"Server error: {str(e)}"}, 
-            status_code=500
+Return ONLY valid JSON with these 4 fields, no other text or markdown.
+
+Examples:
+"I need 5 lakhs for a car" -> {{"loan_amount": 500000, "loan_purpose": "vehicle purchase", "urgency": "medium", "has_collateral": false}}
+"Urgent! Need 2 crores for expanding to 3 new cities" -> {{"loan_amount": 20000000, "loan_purpose": "business expansion", "urgency": "high", "has_collateral": false}}"""
+            }]
         )
         
-async def api_verify_gst(request):
-    """REST endpoint for verify_gst tool"""
+        # Parse Claude's response
+        result_text = response.content[0].text.strip()
+        
+        # Handle potential markdown code blocks
+        if result_text.startswith("```"):
+            # Remove markdown code blocks
+            result_text = result_text.replace("```json", "").replace("```", "").strip()
+        
+        # Parse JSON
+        try:
+            intent = json.loads(result_text)
+        except json.JSONDecodeError as e:
+            # Fallback: try to extract JSON from text
+            import re
+            json_match = re.search(r'\{.*\}', result_text, re.DOTALL)
+            if json_match:
+                intent = json.loads(json_match.group())
+            else:
+                raise ValueError(f"Claude response is not valid JSON: {result_text[:200]}")
+        
+        # Validate required fields
+        required_fields = ["loan_amount", "loan_purpose", "urgency", "has_collateral"]
+        for field in required_fields:
+            if field not in intent:
+                return JSONResponse(
+                    {"error": f"Missing required field: {field}", "claude_response": result_text}, 
+                    status_code=500
+                )
+        
+        return JSONResponse({
+            "extracted": True,
+            "intent": intent,
+            "original_message": message,
+            "extracted_at": datetime.now().isoformat(),
+            "extraction_method": "claude-api"
+        })
+        
+    except json.JSONDecodeError as e:
+        return JSONResponse({"error": f"Invalid JSON in request: {str(e)}"}, status_code=400)
+    except Exception as e:
+        return JSONResponse(
+            {"error": f"Server error: {str(e)}", "type": type(e).__name__}, 
+            status_code=500
+        )
+
+async def api_verify_gst(request: Request):
+    """REST endpoint for verify_gst - Mock for MVP"""
     try:
         body = await request.json()
         gst_number = body.get("gst_number", "")
@@ -189,7 +147,7 @@ async def api_verify_gst(request):
         if not gst_number:
             return JSONResponse({"error": "gst_number field is required"}, status_code=400)
         
-        # Mock GST data
+        # Mock GST data (from FameScore report)
         if gst_number == "09AADCF8429L1Z4":
             result = {
                 "gst_number": gst_number,
@@ -201,8 +159,11 @@ async def api_verify_gst(request):
                 "annual_turnover": 24148440.33,
                 "filing_compliance": 0.84,
                 "pan_number": "AADCF8429L",
+                "credit_score": "CMR-2",
+                "existing_loans": 2710443,
                 "verified": True,
-                "verification_date": datetime.now().isoformat()
+                "verification_date": datetime.now().isoformat(),
+                "verification_method": "mock-api"
             }
         else:
             result = {
@@ -219,8 +180,8 @@ async def api_verify_gst(request):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-async def api_verify_pan(request):
-    """REST endpoint for verify_pan tool"""
+async def api_verify_pan(request: Request):
+    """REST endpoint for verify_pan - Mock for MVP"""
     try:
         body = await request.json()
         pan_number = body.get("pan_number", "")
@@ -252,8 +213,8 @@ async def api_verify_pan(request):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-async def api_parse_gst_report(request):
-    """REST endpoint for parse_gst_report tool"""
+async def api_parse_gst_report(request: Request):
+    """REST endpoint for parse_gst_report"""
     try:
         body = await request.json()
         report = body.get("report", {})
@@ -261,6 +222,7 @@ async def api_parse_gst_report(request):
         if not report:
             return JSONResponse({"error": "report field is required"}, status_code=400)
         
+        # Credit score mapping
         credit_score_map = {
             "CMR-1": 850,
             "CMR-2": 750,
@@ -290,8 +252,8 @@ async def api_parse_gst_report(request):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-async def api_calculate_eligibility(request):
-    """REST endpoint for calculate_eligibility tool"""
+async def api_calculate_eligibility(request: Request):
+    """REST endpoint for calculate_eligibility"""
     try:
         body = await request.json()
         business_data = body.get("business_data", {})
@@ -304,9 +266,11 @@ async def api_calculate_eligibility(request):
         requested_amount = business_data.get("loan_amount", 0)
         credit_score = business_data.get("credit_score_numeric", 750)
         
+        # DTI and eligibility calculations
         dti_ratio = existing_debt / annual_turnover if annual_turnover > 0 else 1.0
         max_eligible = annual_turnover * 0.3
         
+        # Risk assessment
         if credit_score >= 750:
             risk_rating = "LOW"
             approval_probability = 0.90
@@ -320,6 +284,7 @@ async def api_calculate_eligibility(request):
             risk_rating = "HIGH"
             approval_probability = 0.30
         
+        # Decision logic
         if dti_ratio > 0.4:
             decision = "DECLINED"
             reason = "Debt-to-income ratio too high"
@@ -352,8 +317,8 @@ async def api_calculate_eligibility(request):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
-async def api_get_lenders(request):
-    """REST endpoint for get_lender_database tool"""
+async def api_get_lenders(request: Request):
+    """REST endpoint for get_lender_database"""
     try:
         body = await request.json()
         filters = body.get("filters", None)
@@ -396,337 +361,45 @@ async def api_get_lenders(request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 # ============================================================================
-# MCP SERVER INITIALIZATION
+# REGISTER REST API ROUTES
 # ============================================================================
 
-mcp = FastMCP("Loan Origination MCP Server")
-anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+@mcp.get("/health")
+async def health_endpoint(request: Request):
+    """Health check endpoint"""
+    result = await health_check()
+    return JSONResponse(result)
 
-def get_db_connection():
-    """Create database connection"""
-    return psycopg2.connect(
-        os.getenv("DATABASE_URL"),
-        cursor_factory=RealDictCursor
-    )
+@mcp.post("/api/extract_intent")
+async def extract_intent_endpoint(request: Request):
+    """Extract intent from message using Claude"""
+    return await api_extract_intent(request)
 
-# ============================================================================
-# MCP TOOLS (keep all existing tools exactly as they are)
-# ============================================================================
+@mcp.post("/api/verify_gst")
+async def verify_gst_endpoint(request: Request):
+    """Verify GST number"""
+    return await api_verify_gst(request)
 
-@mcp.tool()
-def health_check() -> Dict[str, Any]:
-    """Check if the MCP server and database are healthy"""
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1")
-        cursor.close()
-        conn.close()
-        
-        return {
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "database": "connected",
-            "anthropic_key": "configured" if os.getenv("ANTHROPIC_API_KEY") else "missing"
-        }
-    except Exception as e:
-        return {
-            "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
+@mcp.post("/api/verify_pan")
+async def verify_pan_endpoint(request: Request):
+    """Verify PAN number"""
+    return await api_verify_pan(request)
 
-@mcp.tool()
-def verify_gst(gst_number: str) -> Dict[str, Any]:
-    """Verify GST number and return business data (mock for MVP)"""
-    
-    if gst_number == "09AADCF8429L1Z4":
-        mock_data = {
-            "gst_number": gst_number,
-            "business_name": "FINAGG TECHNOLOGIES PRIVATE LIMITED",
-            "trade_name": "FINAGG TECHNOLOGIES PRIVATE LIMITED",
-            "constitution": "Private Limited",
-            "address": "C 1,SECTOR 16,Noida,Uttar Pradesh-201301",
-            "date_of_registration": "2021-02-21",
-            "annual_turnover": 24148440.33,
-            "filing_compliance": 0.84,
-            "pan_number": "AADCF8429L",
-            "verified": True,
-            "verification_date": datetime.now().isoformat()
-        }
-    else:
-        mock_data = {
-            "gst_number": gst_number,
-            "verified": False,
-            "error": "GST number not found in demo database. Use 09AADCF8429L1Z4 for demo.",
-            "verification_date": datetime.now().isoformat()
-        }
-    
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO verifications (id, verification_type, identifier, raw_response, parsed_data, expires_at)
-            VALUES (gen_random_uuid(), %s, %s, %s, %s, %s)
-            ON CONFLICT DO NOTHING
-            """,
-            (
-                "GST",
-                gst_number,
-                json.dumps(mock_data),
-                json.dumps(mock_data),
-                datetime.now() + timedelta(days=7)
-            )
-        )
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        print(f"Error caching verification: {e}")
-    
-    return mock_data
+@mcp.post("/api/parse_gst_report")
+async def parse_gst_report_endpoint(request: Request):
+    """Parse GST report"""
+    return await api_parse_gst_report(request)
 
-@mcp.tool()
-def verify_pan(pan_number: str) -> Dict[str, Any]:
-    """Verify PAN number (mock for MVP)"""
-    
-    if pan_number == "AADCF8429L":
-        mock_data = {
-            "pan_number": pan_number,
-            "name": "FINAGG TECHNOLOGIES PRIVATE LIMITED",
-            "verified": True,
-            "status": "Active",
-            "verification_date": datetime.now().isoformat()
-        }
-    else:
-        mock_data = {
-            "pan_number": pan_number,
-            "verified": False,
-            "error": "PAN number not found in demo database. Use AADCF8429L for demo.",
-            "verification_date": datetime.now().isoformat()
-        }
-    
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO verifications (id, verification_type, identifier, raw_response, parsed_data, expires_at)
-            VALUES (gen_random_uuid(), %s, %s, %s, %s, %s)
-            ON CONFLICT DO NOTHING
-            """,
-            (
-                "PAN",
-                pan_number,
-                json.dumps(mock_data),
-                json.dumps(mock_data),
-                datetime.now() + timedelta(days=7)
-            )
-        )
-        conn.commit()
-        cursor.close()
-        conn.close()
-    except Exception as e:
-        print(f"Error caching verification: {e}")
-    
-    return mock_data
+@mcp.post("/api/calculate_eligibility")
+async def calculate_eligibility_endpoint(request: Request):
+    """Calculate loan eligibility"""
+    return await api_calculate_eligibility(request)
 
-@mcp.tool()
-def parse_gst_report(report: Dict[str, Any]) -> Dict[str, Any]:
-    """Parse GST report and extract structured data"""
-    
-    credit_score_map = {
-        "CMR-1": 850,
-        "CMR-2": 750,
-        "CMR-3": 650,
-        "CMR-4": 550,
-        "CMR-5": 450
-    }
-    
-    parsed = {
-        "business_name": report.get("business_name", ""),
-        "gst_number": report.get("gst_number", ""),
-        "pan_number": report.get("pan_number", ""),
-        "annual_turnover": report.get("annual_turnover", 0),
-        "filing_compliance": report.get("filing_compliance", 0),
-        "credit_score_text": report.get("credit_score", "CMR-2"),
-        "credit_score_numeric": credit_score_map.get(report.get("credit_score", "CMR-2"), 750),
-        "existing_debt": report.get("existing_loans", 0),
-        "constitution": report.get("constitution", ""),
-        "address": report.get("address", ""),
-        "parsed_at": datetime.now().isoformat()
-    }
-    
-    return parsed
-
-@mcp.tool()
-def calculate_eligibility(business_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Calculate loan eligibility based on business data"""
-    
-    annual_turnover = business_data.get("annual_turnover", 0)
-    existing_debt = business_data.get("existing_debt", 0)
-    requested_amount = business_data.get("loan_amount", 0)
-    credit_score = business_data.get("credit_score_numeric", 750)
-    
-    dti_ratio = existing_debt / annual_turnover if annual_turnover > 0 else 1.0
-    
-    max_eligible = annual_turnover * 0.3
-    
-    if credit_score >= 750:
-        risk_rating = "LOW"
-        approval_probability = 0.90
-    elif credit_score >= 650:
-        risk_rating = "LOW-MEDIUM"
-        approval_probability = 0.75
-    elif credit_score >= 550:
-        risk_rating = "MEDIUM"
-        approval_probability = 0.60
-    else:
-        risk_rating = "HIGH"
-        approval_probability = 0.30
-    
-    if dti_ratio > 0.4:
-        decision = "DECLINED"
-        reason = "Debt-to-income ratio too high"
-    elif requested_amount > max_eligible:
-        decision = "CONDITIONAL"
-        reason = f"Requested amount exceeds maximum eligible amount of ₹{max_eligible:,.0f}"
-    elif credit_score < 550:
-        decision = "DECLINED"
-        reason = "Credit score too low"
-    else:
-        decision = "APPROVED"
-        reason = "All eligibility criteria met"
-    
-    return {
-        "decision": decision,
-        "reason": reason,
-        "approved_amount": min(requested_amount, max_eligible) if decision != "DECLINED" else 0,
-        "max_eligible": max_eligible,
-        "risk_rating": risk_rating,
-        "approval_probability": approval_probability,
-        "dti_ratio": round(dti_ratio, 3),
-        "credit_score": credit_score,
-        "assessed_at": datetime.now().isoformat()
-    }
-
-@mcp.tool()
-def get_lender_database(filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    """Get lenders from database with optional filters"""
-    
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        query = """
-            SELECT DISTINCT ON (name) 
-                id, name, product_name, interest_rate_min, interest_rate_max,
-                commission_structure, approval_rate_avg, active
-            FROM lenders
-            WHERE active = true
-        """
-        
-        params = []
-        
-        if filters:
-            if filters.get("min_amount"):
-                query += " AND loan_amount_min <= %s"
-                params.append(filters["min_amount"])
-            
-            if filters.get("credit_score"):
-                query += " AND min_credit_score <= %s"
-                params.append(filters["credit_score"])
-        
-        query += " ORDER BY name, id LIMIT 3"
-        
-        cursor.execute(query, params)
-        lenders = cursor.fetchall()
-        
-        cursor.close()
-        conn.close()
-        
-        return [dict(lender) for lender in lenders]
-        
-    except Exception as e:
-        print(f"Error fetching lenders: {e}")
-        return []
-
-@mcp.tool()
-def extract_intent(message: str) -> Dict[str, Any]:
-    """Extract loan intent from customer message using Claude"""
-    
-    try:
-        response = anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1000,
-            messages=[{
-                "role": "user",
-                "content": f"""Extract loan intent from this message: "{message}"
-
-Return JSON with:
-- loan_amount: number (in rupees, convert lakhs/crores to actual number)
-- loan_purpose: string (brief description)
-- urgency: string (low/medium/high)
-- has_collateral: boolean (if mentioned)
-
-Return ONLY valid JSON, no other text."""
-            }]
-        )
-        
-        result_text = response.content[0].text
-        result = json.loads(result_text)
-        
-        return {
-            "extracted": True,
-            "intent": result,
-            "original_message": message,
-            "extracted_at": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        return {
-            "extracted": False,
-            "error": str(e),
-            "original_message": message,
-            "extracted_at": datetime.now().isoformat()
-        }
-
-# ============================================================================
-# MAIN ENTRY POINT (UPDATED)
-# ============================================================================
-
-# ============================================================================
-# MAIN ENTRY POINT - HYBRID APPROACH
-# ============================================================================
+@mcp.post("/api/get_lenders")
+async def get_lenders_endpoint(request: Request):
+    """Get lender database"""
+    return await api_get_lenders(request)
 
 if __name__ == "__main__":
-    import sys
-    from starlette.applications import Starlette
-    from starlette.routing import Route
-    import uvicorn
-    
-    if "--http" in sys.argv or os.getenv("RENDER"):
-        port = int(os.getenv("PORT", 10000))
-        
-        # Create Starlette app with REST API routes
-        routes = [
-            Route("/", root_endpoint),
-            Route("/health", health_endpoint),
-            Route("/api/extract-intent", api_extract_intent, methods=["POST"]),
-            Route("/api/verify-gst", api_verify_gst, methods=["POST"]),
-            Route("/api/verify-pan", api_verify_pan, methods=["POST"]),
-            Route("/api/parse-gst-report", api_parse_gst_report, methods=["POST"]),
-            Route("/api/calculate-eligibility", api_calculate_eligibility, methods=["POST"]),
-            Route("/api/get-lenders", api_get_lenders, methods=["POST"]),
-        ]
-        
-        app = Starlette(routes=routes)
-        
-        print(f"Starting REST API server on port {port}...")
-        print(f"Endpoints: /api/extract-intent, /api/verify-gst, etc.")
-        
-        uvicorn.run(app, host="0.0.0.0", port=port)
-    else:
-        print("Starting MCP server in STDIO mode...")
-        mcp.run(transport="stdio")
+    # Run the server
+    mcp.run()

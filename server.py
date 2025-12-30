@@ -82,79 +82,104 @@ async def health_endpoint(request):
 # ============================================================================
 
 async def api_extract_intent(request):
-    """REST endpoint for extract_intent tool - MOCK VERSION FOR TESTING"""
+    """REST endpoint for extract_intent tool - REAL CLAUDE VERSION"""
     try:
         body = await request.json()
         message = body.get("message", "")
         
         if not message:
-            return JSONResponse({"error": "message field is required"}, status_code=400)
+            return JSONResponse(
+                {"error": "message field is required"}, 
+                status_code=400
+            )
         
-        # MOCK: Simple pattern matching (no Anthropic API needed)
-        import re
+        # Check if Anthropic client is available
+        if not anthropic_client:
+            return JSONResponse(
+                {"error": "Anthropic API key not configured"}, 
+                status_code=500
+            )
         
-        # Extract amount
-        amount = 5000000  # default 50 lakhs
-        
-        # Check for lakhs
-        lakh_match = re.search(r'(\d+)\s*lakh', message.lower())
-        if lakh_match:
-            amount = int(lakh_match.group(1)) * 100000
-        
-        # Check for crores
-        crore_match = re.search(r'(\d+)\s*crore', message.lower())
-        if crore_match:
-            amount = int(crore_match.group(1)) * 10000000
-        
-        # Extract purpose
-        purpose = "business expansion"
-        message_lower = message.lower()
-        
-        if "car" in message_lower or "vehicle" in message_lower:
-            purpose = "vehicle purchase"
-        elif "house" in message_lower or "home" in message_lower or "property" in message_lower:
-            purpose = "property purchase"
-        elif "inventory" in message_lower or "stock" in message_lower:
-            purpose = "inventory purchase"
-        elif "equipment" in message_lower or "machinery" in message_lower:
-            purpose = "equipment purchase"
-        elif "working capital" in message_lower:
-            purpose = "working capital"
-        
-        # Determine urgency
-        urgency = "medium"
-        if "urgent" in message_lower or "asap" in message_lower or "immediately" in message_lower:
-            urgency = "high"
-        elif "planning" in message_lower or "future" in message_lower:
-            urgency = "low"
-        
-        # Check for collateral
-        has_collateral = False
-        if "collateral" in message_lower or "security" in message_lower or "property" in message_lower:
-            has_collateral = True
-        
-        result = {
-            "extracted": True,
-            "intent": {
-                "loan_amount": amount,
-                "loan_purpose": purpose,
-                "urgency": urgency,
-                "has_collateral": has_collateral
-            },
-            "original_message": message,
-            "extracted_at": datetime.now().isoformat()
-        }
-        
-        return JSONResponse(result)
+        # Call Claude API
+        try:
+            response = anthropic_client.messages.create(
+                model="claude-sonnet-4-20250514",
+                max_tokens=1000,
+                messages=[{
+                    "role": "user",
+                    "content": f"""Extract loan intent from this message: "{message}"
+
+Return ONLY valid JSON with these exact fields:
+{{
+  "loan_amount": <number in rupees>,
+  "loan_purpose": "<brief purpose>",
+  "urgency": "low|medium|high",
+  "has_collateral": true|false
+}}
+
+Rules:
+- Convert "5 lakhs" to 500000, "2 crores" to 20000000
+- Infer urgency from words like "urgent", "immediately", "planning"
+- Set has_collateral to true only if explicitly mentioned
+- Return ONLY the JSON, no other text"""
+                }]
+            )
+            
+            # Extract JSON from Claude's response
+            result_text = response.content[0].text.strip()
+            
+            # Remove markdown code blocks if present
+            if result_text.startswith("```"):
+                result_text = result_text.split("```")[1]
+                if result_text.startswith("json"):
+                    result_text = result_text[4:]
+                result_text = result_text.strip()
+            
+            # Parse JSON
+            intent = json.loads(result_text)
+            
+            return JSONResponse({
+                "extracted": True,
+                "intent": intent,
+                "original_message": message,
+                "extracted_at": datetime.now().isoformat()
+            })
+            
+        except json.JSONDecodeError as e:
+            # Fallback: try to extract from Claude's response manually
+            import re
+            
+            amount = 5000000
+            lakh_match = re.search(r'(\d+)\s*lakh', message.lower())
+            if lakh_match:
+                amount = int(lakh_match.group(1)) * 100000
+            
+            crore_match = re.search(r'(\d+)\s*crore', message.lower())
+            if crore_match:
+                amount = int(crore_match.group(1)) * 10000000
+            
+            return JSONResponse({
+                "extracted": True,
+                "intent": {
+                    "loan_amount": amount,
+                    "loan_purpose": "business loan",
+                    "urgency": "medium",
+                    "has_collateral": False
+                },
+                "original_message": message,
+                "extracted_at": datetime.now().isoformat(),
+                "warning": "Fallback extraction used due to Claude parsing error"
+            })
         
     except Exception as e:
-        # Log the actual error for debugging
-        print(f"Error in api_extract_intent: {str(e)}")
+        print(f"ERROR in api_extract_intent: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return JSONResponse(
             {"error": f"Server error: {str(e)}"}, 
             status_code=500
         )
-
+        
 async def api_verify_gst(request):
     """REST endpoint for verify_gst tool"""
     try:

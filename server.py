@@ -82,7 +82,7 @@ async def health_endpoint(request):
 # ============================================================================
 
 async def api_extract_intent(request):
-    """REST endpoint for extract_intent tool"""
+    """REST endpoint for extract_intent tool - MOCK VERSION FOR TESTING"""
     try:
         body = await request.json()
         message = body.get("message", "")
@@ -90,38 +90,70 @@ async def api_extract_intent(request):
         if not message:
             return JSONResponse({"error": "message field is required"}, status_code=400)
         
-        # Call the actual function, not the MCP-wrapped tool
-        response = anthropic_client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1000,
-            messages=[{
-                "role": "user",
-                "content": f"""Extract loan intent from this message: "{message}"
-
-Return JSON with:
-- loan_amount: number (in rupees, convert lakhs/crores to actual number)
-- loan_purpose: string (brief description)
-- urgency: string (low/medium/high)
-- has_collateral: boolean (if mentioned)
-
-Return ONLY valid JSON, no other text."""
-            }]
-        )
+        # MOCK: Simple pattern matching (no Anthropic API needed)
+        import re
         
-        result_text = response.content[0].text
-        result = json.loads(result_text)
+        # Extract amount
+        amount = 5000000  # default 50 lakhs
         
-        return JSONResponse({
+        # Check for lakhs
+        lakh_match = re.search(r'(\d+)\s*lakh', message.lower())
+        if lakh_match:
+            amount = int(lakh_match.group(1)) * 100000
+        
+        # Check for crores
+        crore_match = re.search(r'(\d+)\s*crore', message.lower())
+        if crore_match:
+            amount = int(crore_match.group(1)) * 10000000
+        
+        # Extract purpose
+        purpose = "business expansion"
+        message_lower = message.lower()
+        
+        if "car" in message_lower or "vehicle" in message_lower:
+            purpose = "vehicle purchase"
+        elif "house" in message_lower or "home" in message_lower or "property" in message_lower:
+            purpose = "property purchase"
+        elif "inventory" in message_lower or "stock" in message_lower:
+            purpose = "inventory purchase"
+        elif "equipment" in message_lower or "machinery" in message_lower:
+            purpose = "equipment purchase"
+        elif "working capital" in message_lower:
+            purpose = "working capital"
+        
+        # Determine urgency
+        urgency = "medium"
+        if "urgent" in message_lower or "asap" in message_lower or "immediately" in message_lower:
+            urgency = "high"
+        elif "planning" in message_lower or "future" in message_lower:
+            urgency = "low"
+        
+        # Check for collateral
+        has_collateral = False
+        if "collateral" in message_lower or "security" in message_lower or "property" in message_lower:
+            has_collateral = True
+        
+        result = {
             "extracted": True,
-            "intent": result,
+            "intent": {
+                "loan_amount": amount,
+                "loan_purpose": purpose,
+                "urgency": urgency,
+                "has_collateral": has_collateral
+            },
             "original_message": message,
             "extracted_at": datetime.now().isoformat()
-        })
+        }
         
-    except json.JSONDecodeError:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+        return JSONResponse(result)
+        
     except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+        # Log the actual error for debugging
+        print(f"Error in api_extract_intent: {str(e)}")
+        return JSONResponse(
+            {"error": f"Server error: {str(e)}"}, 
+            status_code=500
+        )
 
 async def api_verify_gst(request):
     """REST endpoint for verify_gst tool"""

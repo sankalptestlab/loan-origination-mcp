@@ -361,45 +361,60 @@ async def api_get_lenders(request: Request):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 # ============================================================================
-# REGISTER REST API ROUTES
+# MAIN APPLICATION - STARLETTE ROUTE REGISTRATION
 # ============================================================================
 
-@mcp.get("/health")
+import sys
+import uvicorn
+from starlette.applications import Starlette
+from starlette.routing import Route
+
+async def root_endpoint(request: Request):
+    """Root endpoint - service info"""
+    return JSONResponse({
+        "service": "Loan Origination MCP Server",
+        "version": "production-claude-api",
+        "status": "running",
+        "endpoints": {
+            "health": "/health",
+            "extract_intent": "/api/extract-intent (POST)",
+            "verify_gst": "/api/verify-gst (POST)",
+            "verify_pan": "/api/verify-pan (POST)",
+            "parse_gst_report": "/api/parse-gst-report (POST)",
+            "calculate_eligibility": "/api/calculate-eligibility (POST)",
+            "get_lenders": "/api/get-lenders (POST)"
+        }
+    })
+
 async def health_endpoint(request: Request):
     """Health check endpoint"""
     result = await health_check()
     return JSONResponse(result)
 
-@mcp.post("/api/extract_intent")
-async def extract_intent_endpoint(request: Request):
-    """Extract intent from message using Claude"""
-    return await api_extract_intent(request)
-
-@mcp.post("/api/verify_gst")
-async def verify_gst_endpoint(request: Request):
-    """Verify GST number"""
-    return await api_verify_gst(request)
-
-@mcp.post("/api/verify_pan")
-async def verify_pan_endpoint(request: Request):
-    """Verify PAN number"""
-    return await api_verify_pan(request)
-
-@mcp.post("/api/parse_gst_report")
-async def parse_gst_report_endpoint(request: Request):
-    """Parse GST report"""
-    return await api_parse_gst_report(request)
-
-@mcp.post("/api/calculate_eligibility")
-async def calculate_eligibility_endpoint(request: Request):
-    """Calculate loan eligibility"""
-    return await api_calculate_eligibility(request)
-
-@mcp.post("/api/get_lenders")
-async def get_lenders_endpoint(request: Request):
-    """Get lender database"""
-    return await api_get_lenders(request)
-
 if __name__ == "__main__":
-    # Run the server
-    mcp.run()
+    port = int(os.getenv("PORT", 10000))
+    
+    # Check if running in HTTP mode (Render/production) or MCP stdio mode
+    if "--http" in sys.argv or os.getenv("RENDER"):
+        print(f"Starting HTTP server on port {port}...")
+        
+        # Register all REST API routes
+        routes = [
+            Route("/", root_endpoint),
+            Route("/health", health_endpoint),
+            Route("/api/extract-intent", api_extract_intent, methods=["POST"]),
+            Route("/api/verify-gst", api_verify_gst, methods=["POST"]),
+            Route("/api/verify-pan", api_verify_pan, methods=["POST"]),
+            Route("/api/parse-gst-report", api_parse_gst_report, methods=["POST"]),
+            Route("/api/calculate-eligibility", api_calculate_eligibility, methods=["POST"]),
+            Route("/api/get-lenders", api_get_lenders, methods=["POST"]),
+        ]
+        
+        # Create Starlette app with routes
+        app = Starlette(routes=routes)
+        
+        # Run with uvicorn
+        uvicorn.run(app, host="0.0.0.0", port=port)
+    else:
+        print("Starting MCP server in stdio mode...")
+        mcp.run(transport="stdio")

@@ -433,6 +433,7 @@ if __name__ == "__main__":
         
         # Register all REST API routes
         routes = [
+            Route("/api/explain-decision", api_explain_decision, methods=["POST"]),
             Route("/", root_endpoint),
             Route("/health", health_endpoint),
             Route("/api/extract-intent", api_extract_intent, methods=["POST"]),

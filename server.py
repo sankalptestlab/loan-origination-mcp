@@ -58,7 +58,40 @@ async def health_check() -> dict:
 # ============================================================================
 # REST API ENDPOINTS WITH REAL CLAUDE
 # ============================================================================
+async def api_explain_decision(request: Request):
+    """REST endpoint for explain_decision"""
+    try:
+        body = await request.json()
+        assessment = body.get("assessment", {})
+        recommendation = body.get("recommendation", {})
+        
+        # Call Claude API for explanation
+        response = anthropic_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            messages=[{
+                "role": "user",
+                "content": f"""Generate a personalized loan approval explanation.
 
+Assessment: {json.dumps(assessment)}
+Recommendation: {json.dumps(recommendation)}
+
+Create a friendly, clear explanation covering:
+- Approval decision and amount
+- Why this lender was recommended
+- Next steps
+
+Keep it concise and customer-friendly."""
+            }]
+        )
+        
+        return JSONResponse({
+            "explanation": response.content[0].text,
+            "generated_at": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 async def api_extract_intent(request: Request):
     """
     REST endpoint for extract_intent - PRODUCTION VERSION WITH REAL CLAUDE
